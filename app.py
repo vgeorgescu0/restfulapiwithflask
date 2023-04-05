@@ -25,11 +25,11 @@ class User:
     @staticmethod
     def get_user_by_username(username):
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE username = %s', (username,))
+        cursor.execute('SELECT password FROM users WHERE username = %s', (username))
         user_data = cursor.fetchone()
         cursor.close()
         if user_data:
-            return User(user_data[1], user_data[3])
+            return User(username, user_data[0])
         else:
             return None
 
@@ -48,12 +48,12 @@ def token_required(f):
         if 'Authorization' in request.headers:
             token = request.headers['Authorization'].split(' ')[1]
         if not token:
-            return jsonify({'error': 'Token is missing'}), 401
+            abort(401)
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
             current_user = User.get_user_by_username(data['username'])
         except Exception:
-            return jsonify({'error': 'Token is invalid'}), 401
+            abort(401)
         return f(current_user, *args, **kwargs)
     return decorated
 
@@ -101,12 +101,12 @@ def get_uploaded_files():
 @token_required
 def upload_file(current_user):
     if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
+        abort(400)
     file = request.files['file']
     if file.filename == '':
-        return jsonify({'error': 'No file selected for uploading'}), 400
+        abort(400)
     if not allowed_file(file.filename):
-        return jsonify({'error': 'Only JPG files are allowed'}), 400
+        abort(415)
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
         file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
@@ -133,7 +133,7 @@ def get_public_items():
 @token_required
 def get_users(current_user):
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM users')
+    cursor.execute('SELECT username, email FROM users')
     users_data = cursor.fetchall()
     cursor.close()
     return jsonify(users_data)
@@ -157,7 +157,6 @@ def add_user():
 def bad_request(error):
     return jsonify({'error': 'Bad request'}), 400
 
-
 @app.errorhandler(401)
 def unauthorized(error):
     return jsonify({'error': 'Unauthorized'}), 401
@@ -166,6 +165,10 @@ def unauthorized(error):
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({'error': 'Not found'}), 404
+
+@app.errorhandler(415)
+def bad_media_type(error):
+    return jsonify({'error': 'Bad Media Type'}), 415
 
 
 @app.errorhandler(500)
