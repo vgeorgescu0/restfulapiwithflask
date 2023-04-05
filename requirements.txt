@@ -1,0 +1,7 @@
+flask
+flask-cors
+flake8
+isort
+tox
+pymysql
+jwt
