@@ -3,9 +3,12 @@
 {% block title %}Login{% endblock %}
 
 {% block content %}
+<div class="container">
     <h1>Login</h1>
     {% if error %}
+    <div class="alert-danger">
         <p>{{ error }}</p>
+    </div>
     {% endif %}
     <form method="post" action="{{ url_for('login') }}">
         <div>

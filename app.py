@@ -3,8 +3,9 @@ import jwt
 import datetime
 import os
 from functools import wraps
-from flask import Flask, jsonify, request, current_app, render_template
+from flask import Flask, jsonify, request, current_app, render_template, abort
 from flask_cors import CORS
+from werkzeug.utils import secure_filename 
 
 app = Flask(__name__)
 CORS(app)
@@ -216,31 +217,37 @@ def protected():
     if not user:
         abort(401)
 
-    return render_template('protected.html', user=user)
 
+def create_tables():
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE users (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            username Varchar(100) NOT NULL UNIQUE,
+            password Varchar(256) NOT NULL,
+            email Varchar(320) UNIQUE
+        )''')
 
-@app.route('/upload', methods=['GET', 'POST'])
-def upload():
-    if request.method == 'POST':
-        # check if the post request has the file part
-        if 'file' not in request.files:
-            return render_template('upload.html', error='No file part')
+def clear_tables():
+    cursor = conn.cursor()
+    cursor.execute('''DROP TABLE IF EXISTS users;''')
 
-        file = request.files['file']
-
-        # if user does not select file, browser also submit an empty part without filename
-        if file.filename == '':
-            return render_template('upload.html', error='No selected file')
-
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(file_path)
-            return render_template('upload.html', success='File successfully uploaded')
-        else:
-            return render_template('upload.html', error='Invalid file')
-    else:
-        return render_template('upload.html')
 
 if __name__ == '__main__':
+    import sys
+    print(sys.argv)
+    if '--init' in sys.argv:
+        clear_tables()
+        create_tables()
+        print('Cleared and recreated tables!')
+        sys.argv.remove('--init')
+    
+    if '--cleanup' in sys.argv:
+        clear_tables()
+        print('Removed our database tables!')
+        sys.argv.remove('--cleanup')
+
+    if len(sys.argv) > 1:
+        raise ValueError(f'Unhandled arguements: {sys.argv[1:]}')
+
     app.run(debug=True)
