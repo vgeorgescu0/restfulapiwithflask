@@ -67,7 +67,7 @@ def authenticate(username, password):
 
 def create_token(user):
     payload = {
-        'sub': user.username,
+        'username': user.username,
         'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30)
     }
     return jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
@@ -98,20 +98,29 @@ def get_uploaded_files():
     return [f for f in os.listdir(UPLOAD_FOLDER) if os.path.isfile(os.path.join(UPLOAD_FOLDER, f))]
 
 
+@app.route('/api/v1/protec',methods=['GET'])
+@token_required
+def protec(user):
+    return render_template('protected.html',user=user)
+
 @app.route('/api/v1/upload', methods=['POST'])
 @token_required
-def upload_file(current_user):
+def upload():
     if 'file' not in request.files:
-        abort(400)
+        return jsonify({'error':'No file part'}), 400
+
     file = request.files['file']
+
     if file.filename == '':
-        abort(400)
-    if not allowed_file(file.filename):
-        abort(415)
+        return jsonify({'error':'No file selected'}) , 400
+
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
-        return jsonify({'message': 'File successfully uploaded'})
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+        return jsonify({'message':'File successfully uploaded'})
+    else:
+        return jsonify({'error':'Invalid file'}), 415
 
 
 @app.route('/api/v1/files', methods=['GET'])
@@ -132,7 +141,7 @@ def get_public_items():
 
 @app.route('/api/v1/users', methods=['GET'])
 @token_required
-def get_users(current_user):
+def users_get(current_user):
     cursor = conn.cursor()
     cursor.execute('SELECT username, email FROM users')
     users_data = cursor.fetchall()
@@ -141,17 +150,47 @@ def get_users(current_user):
 
 
 @app.route('/api/v1/users', methods=['POST'])
-def add_user():
+def user_add():
     data = request.get_json()
-    name = data['name']
+    username = data['username']
     email = data['email']
     password = data['password']
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO users (name, email, password) VALUES (%s, %s, %s)', (name, email, password))
+    errors = []
+    # check for existing users
+    cursor.execute('SELECT username FROM users WHERE username = %s', (username))
+    if cursor.fetchone():
+        errors.append('User already exists')
+    
+    # check for existing email
+    cursor.execute('SELECT email FROM users WHERE email = %s', (email))
+    if cursor.fetchone():
+        return jsonify({'error':'Email already exists'})
+    
+    # return all errors
+    if len(errors) > 0:
+        return jsonify({'errors':errors})
+
+    cursor.execute('INSERT INTO users (username, email, password) VALUES (%s, %s, %s)', (username, email, password))
     conn.commit()
     cursor.close()
-    return jsonify({'message': 'User added successfully'})
+    user = User(username=username, password=password)
+    token = create_token(user)
+    return jsonify({'token': token, 'message': 'User added successfully'})
 
+@app.route('/api/v1/users/login',methods=['POST'])
+def user_login():
+    data = request.get_json()
+    username = data['username']
+    password = data['password']
+    user = authenticate(username, password)
+    if user:
+        token = create_token(user)
+        response = jsonify({'token': token, 'message': 'User logged in successfully'})
+        return response, 200
+    else:
+        response = jsonify({'error': 'Invalid user/pass combo'})
+        return response, 401
 
 # error handlers
 @app.errorhandler(400)
@@ -189,33 +228,33 @@ def public():
     return render_template('public.html', public_items=public_items)
 
 
+@app.route('/signup')
+def signup():
+    e = request.args.get('error')
+    username = request.args.get('username')
+    email = request.args.get('email')
+    return render_template('signup.html',e=e,username=username,email=email)
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        user = authenticate(username, password)
-        if user:
-            token = create_token(user)
-            response = jsonify({'access_token': token})
-            return response, 200
-        else:
-            return render_template('login.html', error='Invalid username or password'), 401
-    else:
-        return render_template('login.html')
+    e = request.args.get('error')
+    username = request.args.get('username')
+    return render_template('login.html', error=e, username=username)
 
 
 @app.route('/protected')
 def protected():
+    user = None
     auth_header = request.headers.get('Authorization')
-    if not auth_header:
-        abort(401)
-
-    token = auth_header.split(' ')[1]
-    user = decode_token(token)
-
+    if auth_header:
+        token = auth_header.split(' ')[1]
+        user = decode_token(token)
+    
     if not user:
-        abort(401)
+        user = 'Not logged in'
+
+    return render_template('protec.html', user=user)
 
 
 def create_tables():
