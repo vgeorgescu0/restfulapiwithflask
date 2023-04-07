@@ -1,292 +1,177 @@
+from flask import Flask, jsonify, request, abort
+from flask_jwt_extended import JWTManager, jwt_required, create_access_token, get_jwt_identity
 import pymysql
-import jwt
-import datetime
 import os
-from functools import wraps
-from flask import Flask, jsonify, request, current_app, render_template, abort
 from flask_cors import CORS
-from werkzeug.utils import secure_filename 
+from werkzeug.utils import secure_filename
+
 
 app = Flask(__name__)
 CORS(app)
+app.config['JWT_SECRET_KEY'] = '449supersecretkey'
 
-# MySQL database connection
-conn = pymysql.connect(host='localhost',
-                       user='root',
-                       password='1234567890',
-                       db='449_db')
+jwt = JWTManager(app)
+
+# MySQL connection
+conn = pymysql.connect(
+        host='localhost',
+        user='root',
+        password="1234567890",
+        db='449_db',
+        cursorclass=pymysql.cursors.DictCursor
+        )
 
 
 # User model
 class User:
-    def __init__(self, username, password):
-        self.username = username
-        self.password = password
 
-    @staticmethod
-    def get_user_by_username(username):
+    # Get user by username
+    def get_user_by_name(username):
         cursor = conn.cursor()
-        cursor.execute('SELECT password FROM users WHERE username = %s', (username))
+        cursor.execute('SELECT * FROM users WHERE username = % s', (username))
         user_data = cursor.fetchone()
         cursor.close()
         if user_data:
-            return User(username, user_data[0])
+            return user_data
         else:
-            return None
+            abort(404, 'User not found')
 
-    def check_password(self, password):
-        return self.password == password
-
-
-# JWT authentication
-app.config['SECRET_KEY'] = 'your_secret_key'
-
-
-def token_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = None
-        if 'Authorization' in request.headers:
-            token = request.headers['Authorization'].split(' ')[1]
-        if not token:
-            abort(401)
-        try:
-            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-            current_user = User.get_user_by_username(data['username'])
-        except Exception:
-            abort(401)
-        return f(current_user, *args, **kwargs)
-    return decorated
+    # Get user by id
+    def get_user_by_id(id):
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM users WHERE id = % s', (id))
+        user_data = cursor.fetchone()
+        cursor.close()
+        if user_data:
+            return user_data
+        else:
+            abort(404, 'User not found')
 
 
-def authenticate(username, password):
-    user = User.get_user_by_username(username)
-    if user and user.check_password(password):
-        return user
+# File model
+class JpgFileCheck:
+
+    # Check if file is allowed
+    def allowed_file(filename):
+        return '.' in filename and \
+            filename.rsplit('.', 1)[1].lower() in {'jpg', 'jpeg'}
+
+    # Check if file size is allowed
+    def allowed_file_size(file):
+        return file <= 5 * 1024 * 1024
 
 
-def create_token(user):
-    payload = {
-        'username': user.username,
-        'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30)
-    }
-    return jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
+# Login endpoint
+@app.route('/api/v1/login', methods=['POST'])
+def login():
+    username = request.json.get('username', None)
+    password = request.json.get('password', None)
+
+    # Obtain user data
+    if request.method == 'POST':
+        user_data = User.get_user_by_name(username)
+    else:
+        abort(404, 'User not found')
+
+    # Validate credentials
+    if user_data["username"] is None or not user_data["password"] == password:
+        abort(401, 'Invalid username or password')
+
+    access_token = create_access_token(identity=user_data['id'])
+    return jsonify({'access_token': access_token})
 
 
-def decode_token(token):
-    try:
-        payload = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
-        return User.get_user_by_username(payload['sub'])
-    except jwt.ExpiredSignatureError:
-        return None
+# Protected endpoint
+@app.route('/api/v1/protected', methods=['GET'])
+@jwt_required()  # Only authenticated users can access this endpoint
+def protected():
+    user_id = get_jwt_identity()
+    user_data = User.get_user_by_id(user_id)
+    return jsonify({'message': f'Hello {user_data["username"]}! You are logged in!'})
 
 
-# File handling
-UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'jpg'}
-
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-
-
-def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-def get_uploaded_files():
-    return [f for f in os.listdir(UPLOAD_FOLDER) if os.path.isfile(os.path.join(UPLOAD_FOLDER, f))]
-
-
-@app.route('/api/v1/protec',methods=['GET'])
-@token_required
-def protec(user):
-    return render_template('protected.html',user=user)
-
+# Upload file to uploads folder
 @app.route('/api/v1/upload', methods=['POST'])
-@token_required
 def upload():
     if 'file' not in request.files:
-        return jsonify({'error':'No file part'}), 400
+        abort(404, 'No file part')
 
     file = request.files['file']
 
     if file.filename == '':
-        return jsonify({'error':'No file selected'}) , 400
+        abort(404, 'No selected file')
 
-    if file and allowed_file(file.filename):
+    file_size = request.headers.get('Content-Length', type=int)
+    if not JpgFileCheck.allowed_file_size(file_size):
+        abort(413, 'File size too large')
+
+    if file and JpgFileCheck.allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file_path = os.path.join('uploads/', filename)
         file.save(file_path)
-        return jsonify({'message':'File successfully uploaded'})
+        return jsonify({'message': 'File successfully uploaded'})
     else:
-        return jsonify({'error':'Invalid file'}), 415
+        abort(415, 'File type not supported')
 
 
-@app.route('/api/v1/files', methods=['GET'])
-@token_required
-def get_files(current_user):
-    files = []
-    for filename in os.listdir(current_app.config['UPLOAD_FOLDER']):
-        if allowed_file(filename):
-            files.append(filename)
-    return jsonify(files)
-
-
-@app.route('/api/v1/public/items', methods=['GET'])
-def get_public_items():
-    public_items = ['item 1', 'item 2', 'item 3']
-    return jsonify(public_items)
-
-
-@app.route('/api/v1/users', methods=['GET'])
-@token_required
-def users_get(current_user):
+# Public endpoint
+@app.route('/api/v1/movies', methods=['GET'])
+def get_movies():
     cursor = conn.cursor()
-    cursor.execute('SELECT username, email FROM users')
-    users_data = cursor.fetchall()
-    cursor.close()
-    return jsonify(users_data)
+    cursor.execute("SELECT * FROM movies")
+    movies = cursor.fetchall()
+    conn.close()
+
+    # Create a list of movies
+    movies_list = []
+    for movie in movies:
+        movies_list.append([f'Movie: {movie["movie"]}',
+                            f'Description: {movie["description"]}',
+                            f'Rating: {movie["rating"]}'])
+    return movies_list
 
 
-@app.route('/api/v1/users', methods=['POST'])
-def user_add():
-    data = request.get_json()
-    username = data['username']
-    email = data['email']
-    password = data['password']
-    cursor = conn.cursor()
-    errors = []
-    # check for existing users
-    cursor.execute('SELECT username FROM users WHERE username = %s', (username))
-    if cursor.fetchone():
-        errors.append('User already exists')
-    
-    # check for existing email
-    cursor.execute('SELECT email FROM users WHERE email = %s', (email))
-    if cursor.fetchone():
-        return jsonify({'error':'Email already exists'})
-    
-    # return all errors
-    if len(errors) > 0:
-        return jsonify({'errors':errors})
-
-    cursor.execute('INSERT INTO users (username, email, password) VALUES (%s, %s, %s)', (username, email, password))
-    conn.commit()
-    cursor.close()
-    user = User(username=username, password=password)
-    token = create_token(user)
-    return jsonify({'token': token, 'message': 'User added successfully'})
-
-@app.route('/api/v1/users/login',methods=['POST'])
-def user_login():
-    data = request.get_json()
-    username = data['username']
-    password = data['password']
-    user = authenticate(username, password)
-    if user:
-        token = create_token(user)
-        response = jsonify({'token': token, 'message': 'User logged in successfully'})
-        return response, 200
-    else:
-        response = jsonify({'error': 'Invalid user/pass combo'})
-        return response, 401
-
-# error handlers
+# Error handler
 @app.errorhandler(400)
-def bad_request(error):
-    return jsonify({'error': 'Bad request'}), 400
+def bad_request(e):
+    return jsonify({'message': '400 ERROR: Bad request'}), 400
+
 
 @app.errorhandler(401)
-def unauthorized(error):
-    return jsonify({'error': 'Unauthorized'}), 401
+def unauthorized(e):
+    return jsonify({'message': '401 ERROR: Unauthorized'}), 401
 
 
 @app.errorhandler(404)
-def not_found(error):
-    return jsonify({'error': 'Not found'}), 404
+def page_not_found(e):
+    return jsonify({'message': '404 ERROR: Not found'}), 404
+
+
+@app.errorhandler(405)
+def method_not_allowed(e):
+    return jsonify({'message': '405 ERROR: Method not allowed'}), 405
+
+
+@app.errorhandler(413)
+def request_entity_too_large(e):
+    return jsonify({'message': '413 ERROR: Request entity too large'}), 413
+
 
 @app.errorhandler(415)
-def bad_media_type(error):
-    return jsonify({'error': 'Bad Media Type'}), 415
+def unsupported_media_type(e):
+    return jsonify({'message': '415 ERROR: Unsupported media type'}), 415
 
 
 @app.errorhandler(500)
-def internal_server_error(error):
-    return jsonify({'error': 'Internal server error'}), 500
-
-
-# Routes
-@app.route('/')
-def index():
-    return 'Hello, World!'
-
-
-@app.route('/public')
-def public():
-    public_items = ['Public item 1', 'Public item 2', 'Public item 3']
-    return render_template('public.html', public_items=public_items)
-
-
-@app.route('/signup')
-def signup():
-    e = request.args.get('error')
-    username = request.args.get('username')
-    email = request.args.get('email')
-    return render_template('signup.html',e=e,username=username,email=email)
-
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    e = request.args.get('error')
-    username = request.args.get('username')
-    return render_template('login.html', error=e, username=username)
-
-
-@app.route('/protected')
-def protected():
-    user = None
-    auth_header = request.headers.get('Authorization')
-    if auth_header:
-        token = auth_header.split(' ')[1]
-        user = decode_token(token)
-    
-    if not user:
-        user = 'Not logged in'
-
-    return render_template('protec.html', user=user)
-
-
-def create_tables():
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE users (
-            id INT PRIMARY KEY AUTO_INCREMENT,
-            username Varchar(100) NOT NULL UNIQUE,
-            password Varchar(256) NOT NULL,
-            email Varchar(320) UNIQUE
-        )''')
-
-def clear_tables():
-    cursor = conn.cursor()
-    cursor.execute('''DROP TABLE IF EXISTS users;''')
+def internal_server_error(e):
+    return jsonify({'message': '500 ERROR: Internal server error'}), 500
 
 
 if __name__ == '__main__':
-    import sys
-    print(sys.argv)
-    if '--init' in sys.argv:
-        clear_tables()
-        create_tables()
-        print('Cleared and recreated tables!')
-        sys.argv.remove('--init')
-    
-    if '--cleanup' in sys.argv:
-        clear_tables()
-        print('Removed our database tables!')
-        sys.argv.remove('--cleanup')
+    app.config['UPLOAD_FOLDER'] = 'uploads'
 
-    if len(sys.argv) > 1:
-        raise ValueError(f'Unhandled arguements: {sys.argv[1:]}')
+    # ensure the uploads folder exists
+    if not os.path.exists(app.config['UPLOAD_FOLDER']):
+        os.makedirs(app.config['UPLOAD_FOLDER'])
 
     app.run(debug=True)
