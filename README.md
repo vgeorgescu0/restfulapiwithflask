@@ -6,7 +6,7 @@ This is an API using MySQL as databse to demonstrate flask initialization and co
 
 Contributing Members: Gabriel Warkentin, Victor Georgescu
 
-All testing and execution performed on Python 3.10.9, not tested for other versions at this time, please use this package for proper execution.
+All testing and execution performed on Python 3.10.9, not tested for other versions at this time. Please use this package for proper execution.
 
 # Pre-Reqs
 
