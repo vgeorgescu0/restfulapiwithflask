@@ -107,7 +107,7 @@ def upload():
 
     if file and JpgFileCheck.allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        file_path = os.path.join('uploads/', filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
         return jsonify({'message': 'File successfully uploaded'})
     else:
