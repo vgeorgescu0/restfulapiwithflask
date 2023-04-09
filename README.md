@@ -21,6 +21,7 @@ CREATE TABLE `users` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `username` (`username`),
   UNIQUE KEY `email` (`email`)
+  );
 ```
 
 ```
@@ -29,6 +30,7 @@ CREATE TABLE `movies` (
   `description` varchar(255) DEFAULT NULL,
   `rating` decimal(3,1) DEFAULT NULL,
   UNIQUE KEY `movie_UNIQUE` (`movie`)
+  );
 ```
 
 # Instructions
